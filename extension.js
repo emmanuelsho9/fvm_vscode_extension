@@ -1,11 +1,10 @@
 // @ts-nocheck
-// src/extension.js
 const vscode = require("vscode");
 const { exec, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
-/** Run a shell command (utf-8) */
+/** Run shell command sync */
 function run(cmd, cwd) {
   return execSync(cmd, { encoding: "utf8", cwd });
 }
@@ -21,42 +20,25 @@ function detectPackageId(root) {
   return "com.example.myapp";
 }
 
-// -------------------------------------------------------------------
-// 🔥 NEW: Helper function for parsing FVM list output (used by multiple commands)
-// -------------------------------------------------------------------
+/** Parse FVM list reliably */
 function parseFvmList() {
-  const raw = run('fvm list | sed -E "s/\\x1B\\[[0-9;]*[a-zA-Z]//g"'); // Run fvm list and strip ANSI color codes
-  const lines = raw
+  const raw = run('fvm list | sed -E "s/\\x1B\\[[0-9;]*[a-zA-Z]//g"');
+  return raw
     .split("\n")
     .map((l) => l.trim())
-    // Filter out empty lines and headers
-    .filter((l) => l && !l.startsWith("⚙️") && !l.startsWith("FVM"));
-
-  const versions = lines
+    .filter((l) => l && !l.startsWith("FVM") && !l.startsWith("⚙️"))
     .map((l) => {
-      // Extract only the version name (the text between the first two '│' characters)
       const match = l.match(/│\s*([^│]+)\s*│/);
-      const versionName = match
-        ? match[1].trim()
-        : l.replace(" (global)", "").trim();
-
-      // Determine if it's the current global version (marked by '●' in output)
+      const name = match ? match[1].trim() : l.replace(" (global)", "").trim();
       const isGlobal = l.includes(" (global)") || l.includes("●");
-
-      return {
-        name: versionName,
-        channel: null,
-        isGlobal: isGlobal,
-      };
+      return { name, isGlobal };
     })
-    .filter((v) => v.name); // Filter out any empty names that might sneak in
-
-  return versions;
+    .filter((v) => v.name);
 }
 
-/** Extension entry point */
+/** Activate extension */
 function activate(context) {
-  // ---------- Status bar ----------
+  // ---------- Status Bar ----------
   const statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
@@ -66,13 +48,9 @@ function activate(context) {
   statusBar.show();
   context.subscriptions.push(statusBar);
 
-  // -------------------------------------------------------------------
-  // 🔥 FIX: refreshStatus now uses the reliable parseFvmList helper
-  // -------------------------------------------------------------------
   function refreshStatus() {
     try {
       const list = parseFvmList();
-      // Find the version currently marked as global
       const global = list.find((v) => v.isGlobal);
       statusBar.text = global
         ? `$(flutter) FVM ${global.name}`
@@ -83,7 +61,52 @@ function activate(context) {
   }
   refreshStatus();
 
-  // ---------- New Project (Your confirmed working version) ----------
+// ---------- FVM Sidebar ----------
+ const provider = vscode.window.registerWebviewViewProvider("fvm.commands", {
+    resolveWebviewView(view) {
+      view.webview.options = { enableScripts: true };
+      view.webview.html = getHtml();
+      view.webview.onDidReceiveMessage((msg) => {
+        // 🟢 FIX: Execute the registered command ID instead of calling the function directly.
+        switch (msg.command) {
+          case "newProject":
+            vscode.commands.executeCommand("fvm.newProject");
+            break;
+          case "useVersion":
+            vscode.commands.executeCommand("fvm.useVersion");
+            break;
+          case "installVersion":
+            vscode.commands.executeCommand("fvm.installVersion");
+            break;
+          case "removeVersion":
+            vscode.commands.executeCommand("fvm.removeVersion");
+            break;
+          case "global":
+            vscode.commands.executeCommand("fvm.global");
+            break;
+          case "list":
+            vscode.commands.executeCommand("fvm.list");
+            break;
+          case "buildApk":
+            // Note: 'buildApk' is a local function, not a registered command. 
+            // It's safe to call it directly IF it was in scope, but 
+            // for consistency and to avoid scope issues, it's better to register it.
+            // Since it's a local function defined just above, we'll keep the direct call 
+            // but ensure 'buildApk' is defined before this block.
+            buildApk(); 
+            break;
+          case "run":
+            // Same as above, 'runFlutter' is a local function.
+            runFlutter();
+            break;
+          default:
+            vscode.window.showInformationMessage(`Unknown command: ${msg.command}`);
+        }
+      });
+    },
+  });
+  // ----------------- Commands -----------------
+
   const cmdNewProject = vscode.commands.registerCommand(
     "fvm.newProject",
     async () => {
@@ -113,21 +136,16 @@ function activate(context) {
 
           versions = lines
             .map((l) => {
-              // Remove all table-like characters
               let cleaned = l.replace(/[│]/g, "").trim();
-
-              // Split by whitespace and take the last valid version number (common FVM table layout)
               const parts = cleaned.split(/\s+/);
-              // Look for something like 3.35.7 (digit.digit.digit)
               const versionMatch = parts.find((p) => /^\d+\.\d+\.\d+$/.test(p));
               if (!versionMatch) return null;
-
               const isGlobal =
                 cleaned.includes("●") || cleaned.includes("(global)");
               return {
                 label: versionMatch,
                 description: isGlobal ? "global" : "",
-                version: versionMatch, // <- this is now correct for fvm use
+                version: versionMatch,
               };
             })
             .filter(Boolean);
@@ -145,13 +163,11 @@ function activate(context) {
           return;
         }
 
-        // Select version
         const pick = await vscode.window.showQuickPick(versions, {
           placeHolder: "Select Flutter version for this project",
         });
         if (!pick) return;
 
-        // Create project
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
@@ -189,13 +205,12 @@ function activate(context) {
           );
           return;
         }
-        // Ask to open project
+
         const open = await vscode.window.showInformationMessage(
           `Project "${name}" created with Flutter ${pick.version}! Open folder?`,
           "Yes",
           "No"
         );
-
         if (open === "Yes") {
           await vscode.commands.executeCommand(
             "vscode.openFolder",
@@ -204,37 +219,30 @@ function activate(context) {
           );
         }
       } catch (e) {
-        console.error(e + "checking...");
+        console.error(e);
         vscode.window.showErrorMessage(`Failed: ${e.message}`);
       }
     }
   );
 
-  // ---------- Use Version ----------
   const cmdUseVersion = vscode.commands.registerCommand(
     "fvm.useVersion",
     async () => {
       const ws = vscode.workspace.workspaceFolders?.[0];
-      if (!ws) {
-        vscode.window.showErrorMessage("Open a folder first");
-        return;
-      }
+      if (!ws) return vscode.window.showErrorMessage("Open a folder first");
 
       let versions;
       try {
-        versions = parseFvmList(); // 🔥 FIX: Use reliable parsing
+        versions = parseFvmList();
       } catch {
-        vscode.window.showErrorMessage("FVM not installed");
-        return;
+        return vscode.window.showErrorMessage("FVM not installed");
       }
 
       const items = versions.map((v) => ({
         label: v.name,
-        description: v.channel,
         detail: v.isGlobal ? "global" : "",
         version: v.name,
       }));
-
       const pick = await vscode.window.showQuickPick(items, {
         placeHolder: "Select FVM version to use for this project",
       });
@@ -250,8 +258,7 @@ function activate(context) {
     }
   );
 
-  // ---------- Install Version (Using synchronous run - consider converting to async exec for long tasks) ----------
-  const cmdInstall = vscode.commands.registerCommand(
+  const cmdInstallVersion = vscode.commands.registerCommand(
     "fvm.installVersion",
     async () => {
       const ver = await vscode.window.showInputBox({
@@ -265,7 +272,6 @@ function activate(context) {
             location: vscode.ProgressLocation.Notification,
             title: `Installing ${ver}…`,
           },
-          // For installation, use ASYNC exec wrapped in a Promise to prevent UI freezing
           () =>
             new Promise((resolve, reject) => {
               exec(
@@ -286,16 +292,14 @@ function activate(context) {
     }
   );
 
-  // ---------- Remove Version ----------
-  const cmdRemove = vscode.commands.registerCommand(
+  const cmdRemoveVersion = vscode.commands.registerCommand(
     "fvm.removeVersion",
     async () => {
       let versions;
       try {
-        versions = parseFvmList(); // 🔥 FIX: Use reliable parsing
+        versions = parseFvmList();
       } catch {
-        vscode.window.showErrorMessage("FVM list failed");
-        return;
+        return vscode.window.showErrorMessage("FVM list failed");
       }
 
       const items = versions.map((v) => ({ label: v.name, version: v.name }));
@@ -314,29 +318,24 @@ function activate(context) {
     }
   );
 
-  // ---------- List Versions ----------
   const cmdList = vscode.commands.registerCommand("fvm.list", () => {
     try {
       const out = run("fvm list");
       const panel = vscode.window.createOutputChannel("FVM List");
-
       panel.clear();
       panel.append(out);
-
       panel.show();
     } catch {
       vscode.window.showErrorMessage("FVM not installed");
     }
   });
 
-  // ---------- Set Global ----------
   const cmdGlobal = vscode.commands.registerCommand("fvm.global", async () => {
     let versions;
     try {
-      versions = parseFvmList(); // 🔥 FIX: Use reliable parsing
+      versions = parseFvmList();
     } catch {
-      vscode.window.showErrorMessage("FVM list failed");
-      return;
+      return vscode.window.showErrorMessage("FVM list failed");
     }
 
     const items = versions.map((v) => ({ label: v.name, version: v.name }));
@@ -354,84 +353,79 @@ function activate(context) {
     }
   });
 
-  // ---------- Rename Package ID (No change needed) ----------
-  const cmdRename = vscode.commands.registerCommand(
-    "fvm.renamePackage",
-    async () => {
-      const ws = vscode.workspace.workspaceFolders?.[0];
-      if (!ws) {
-        vscode.window.showErrorMessage("Open a Flutter project");
-        return;
-      }
+  // ---------- Build APK ----------
+  async function buildApk() {
+    const ws = vscode.workspace.workspaceFolders?.[0];
+    if (!ws) return vscode.window.showErrorMessage("Open a Flutter project");
 
-      const root = ws.uri.fsPath;
-      const oldId = detectPackageId(root);
-      const newId = await vscode.window.showInputBox({
-        prompt: "New package ID",
-        value: oldId,
-      });
-      if (!newId || newId === oldId) return;
-
-      try {
-        await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: `Renaming to ${newId}…`,
-          },
-          () => {
-            // Android
-            const gradle = path.join(root, "android", "app", "build.gradle");
-            if (fs.existsSync(gradle)) {
-              let c = fs.readFileSync(gradle, "utf8");
-              c = c.replace(
-                /applicationId\s+["'][^"']+["']/,
-                `applicationId "${newId}"`
-              );
-              fs.writeFileSync(gradle, c);
+    vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Building APK...",
+      },
+      () =>
+        new Promise((resolve, reject) => {
+          exec(
+            "fvm flutter build apk --release",
+            { cwd: ws.uri.fsPath, encoding: "utf8" },
+            (err, stdout, stderr) => {
+              if (err) reject(stderr || err.message);
+              else {
+                vscode.window.showInformationMessage("APK build complete!");
+                resolve(stdout);
+              }
             }
+          );
+        })
+    );
+  }
 
-            // iOS
-            const pbx = path.join(
-              root,
-              "ios",
-              "Runner.xcodeproj",
-              "project.pbxproj"
-            );
-            if (fs.existsSync(pbx)) {
-              let c = fs.readFileSync(pbx, "utf8");
-              c = c.replace(
-                /PRODUCT_BUNDLE_IDENTIFIER\s*=\s*[^;]+;/g,
-                `PRODUCT_BUNDLE_IDENTIFIER = ${newId};`
-              );
-              fs.writeFileSync(pbx, c);
-            }
+  // ---------- Run Flutter ----------
+  async function runFlutter() {
+    const ws = vscode.workspace.workspaceFolders?.[0];
+    if (!ws) return vscode.window.showErrorMessage("Open a Flutter project");
 
-            // pubspec.yaml
-            const pub = path.join(root, "pubspec.yaml");
-            if (fs.existsSync(pub)) {
-              let c = fs.readFileSync(pub, "utf8");
-              const name = newId.split(".").pop();
-              c = c.replace(/^name:\s*.+$/m, `name: ${name}`);
-              fs.writeFileSync(pub, c);
-            }
-          }
-        );
-        vscode.window.showInformationMessage(`Package ID → ${newId}`);
-      } catch (e) {
-        vscode.window.showErrorMessage(`Failed: ${e.message}`);
-      }
-    }
-  );
+    const term = vscode.window.createTerminal({
+      name: "Flutter Run",
+      cwd: ws.uri.fsPath,
+    });
+    term.show();
+    term.sendText("fvm flutter run");
+  }
 
-  // Register everything
+  // ---------- Sidebar HTML ----------
+  function getHtml() {
+    return `
+      <html>
+        <body style="font-family: sans-serif;">
+          <h3>FVM Tools</h3>
+          <button onclick="send('newProject')">New Project</button><br/>
+          <button onclick="send('useVersion')">Use Version</button><br/>
+          <button onclick="send('installVersion')">Install Version</button><br/>
+          <button onclick="send('removeVersion')">Remove Version</button><br/>
+          <button onclick="send('global')">Set Global</button><br/>
+          <button onclick="send('list')">List Versions</button>
+          <hr>
+          <button onclick="send('buildApk')">Build APK (Release)</button><br/>
+          <button onclick="send('run')">Run Flutter</button>
+          <script>
+            const vscode = acquireVsCodeApi();
+            function send(command) { vscode.postMessage({ command }); }
+          </script>
+        </body>
+      </html>
+    `;
+  }
+
+  // ---------- Register all commands ----------
   context.subscriptions.push(
     cmdNewProject,
     cmdUseVersion,
-    cmdInstall,
-    cmdRemove,
+    cmdInstallVersion,
+    cmdRemoveVersion,
     cmdList,
     cmdGlobal,
-    cmdRename
+    provider
   );
 }
 
