@@ -1,8 +1,3 @@
-That's a fantastic template! A detailed `README.md` is crucial for getting users to understand and trust your extension.
-
-Here is a comprehensive `README.md` for your **FVM Pro** extension, following the structure and detail you provided, focusing on the commands and features you built.
-
----
 
 # FVM Pro: Full FVM Integration for Flutter 🚀
 
@@ -58,4 +53,3 @@ Reporting can be disabled via VS Code's standard **Telemetry: Telemetry Level** 
 For full release notes and version history, see the **CHANGELOG.md** file in the repository.
 
 
-//https://dev.azure.com/e0/_usersSettings/tokens
