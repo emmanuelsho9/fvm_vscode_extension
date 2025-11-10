@@ -25,31 +25,34 @@ function detectPackageId(root) {
 // 🔥 NEW: Helper function for parsing FVM list output (used by multiple commands)
 // -------------------------------------------------------------------
 function parseFvmList() {
-  const raw = run("fvm list | sed -E \"s/\\x1B\\[[0-9;]*[a-zA-Z]//g\""); // Run fvm list and strip ANSI color codes
+  const raw = run('fvm list | sed -E "s/\\x1B\\[[0-9;]*[a-zA-Z]//g"'); // Run fvm list and strip ANSI color codes
   const lines = raw
     .split("\n")
     .map((l) => l.trim())
     // Filter out empty lines and headers
     .filter((l) => l && !l.startsWith("⚙️") && !l.startsWith("FVM"));
 
-  const versions = lines.map((l) => {
-    // Extract only the version name (the text between the first two '│' characters)
-    const match = l.match(/│\s*([^│]+)\s*│/);
-    const versionName = match ? match[1].trim() : l.replace(" (global)", "").trim();
-    
-    // Determine if it's the current global version (marked by '●' in output)
-    const isGlobal = l.includes(" (global)") || l.includes("●"); 
-    
-    return {
-      name: versionName,
-      channel: null,
-      isGlobal: isGlobal,
-    };
-  }).filter(v => v.name); // Filter out any empty names that might sneak in
+  const versions = lines
+    .map((l) => {
+      // Extract only the version name (the text between the first two '│' characters)
+      const match = l.match(/│\s*([^│]+)\s*│/);
+      const versionName = match
+        ? match[1].trim()
+        : l.replace(" (global)", "").trim();
+
+      // Determine if it's the current global version (marked by '●' in output)
+      const isGlobal = l.includes(" (global)") || l.includes("●");
+
+      return {
+        name: versionName,
+        channel: null,
+        isGlobal: isGlobal,
+      };
+    })
+    .filter((v) => v.name); // Filter out any empty names that might sneak in
 
   return versions;
 }
-
 
 /** Extension entry point */
 function activate(context) {
@@ -70,7 +73,7 @@ function activate(context) {
     try {
       const list = parseFvmList();
       // Find the version currently marked as global
-      const global = list.find((v) => v.isGlobal); 
+      const global = list.find((v) => v.isGlobal);
       statusBar.text = global
         ? `$(flutter) FVM ${global.name}`
         : "$(flutter) FVM";
@@ -80,119 +83,132 @@ function activate(context) {
   }
   refreshStatus();
 
-// ---------- New Project (Your confirmed working version) ----------
-const cmdNewProject = vscode.commands.registerCommand("fvm.newProject", async () => {
-  const name = await vscode.window.showInputBox({ prompt: "Project name" });
-  if (!name) return;
+  // ---------- New Project (Your confirmed working version) ----------
+  const cmdNewProject = vscode.commands.registerCommand(
+    "fvm.newProject",
+    async () => {
+      try {
+        const name = await vscode.window.showInputBox({
+          prompt: "Project name",
+        });
+        if (!name) return;
 
-  const folder = await vscode.window.showOpenDialog({
-    canSelectFolders: true,
-    openLabel: "Select parent folder",
-  });
-  if (!folder) return;
+        const folder = await vscode.window.showOpenDialog({
+          canSelectFolders: true,
+          openLabel: "Select parent folder",
+        });
+        if (!folder) return;
 
-  const projectPath = path.join(folder[0].fsPath, name);
+        const projectPath = path.join(folder[0].fsPath, name);
 
-  // ---------- Step 1: Get available versions using robust string parsing ----------
-  let versions = [];
-  try {
-    versions = parseFvmList(); // Use the new helper function
-  } catch {
-    vscode.window.showErrorMessage("FVM not installed or unable to read versions.");
-    return;
-  }
-  // --- END OF VERSION PARSING ---
+        // Get FVM versions
+        let versions = [];
+        try {
+          const raw = run("fvm list");
+          const clean = raw.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+          const lines = clean
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l && !l.startsWith("FVM") && !l.startsWith("⚙️"));
 
-  // Add option for "Install new version"
-  const items = [
-    ...versions.map((v) => ({
-      label: v.name,
-      description: v.channel || (v.isGlobal ? "global" : ""),
-      version: v.name,
-    })),
-    { label: "$(plus) Install new version…", version: null },
-  ];
+          versions = lines
+            .map((l) => {
+              // Remove all table-like characters
+              let cleaned = l.replace(/[│]/g, "").trim();
 
-  // ---------- Step 2: Let user pick or install version ----------
-  let pick = await vscode.window.showQuickPick(items, {
-    placeHolder: "Select Flutter version for this project",
-  });
-  if (!pick) return;
+              // Split by whitespace and take the last valid version number (common FVM table layout)
+              const parts = cleaned.split(/\s+/);
+              // Look for something like 3.35.7 (digit.digit.digit)
+              const versionMatch = parts.find((p) => /^\d+\.\d+\.\d+$/.test(p));
+              if (!versionMatch) return null;
 
-  // If user wants to install a new version
-  if (!pick.version) {
-    const ver = await vscode.window.showInputBox({
-      prompt: "Enter Flutter version or channel (e.g. 3.24.0 or stable)",
-    });
-    if (!ver) return;
+              const isGlobal =
+                cleaned.includes("●") || cleaned.includes("(global)");
+              return {
+                label: versionMatch,
+                description: isGlobal ? "global" : "",
+                version: versionMatch, // <- this is now correct for fvm use
+              };
+            })
+            .filter(Boolean);
+        } catch {
+          vscode.window.showErrorMessage(
+            "FVM not installed or unable to read versions."
+          );
+          return;
+        }
 
-    try {
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `Installing Flutter ${ver} via FVM…`,
-        },
-        () =>
-          new Promise((resolve, reject) => {
-            exec(`fvm install ${ver}`, { encoding: "utf8" }, (err, stdout, stderr) => {
-              if (err) reject(new Error(err.message + "\n" + stderr));
-              else resolve(stdout);
-            });
-          })
-      );
-      pick = { version: ver };
-    } catch (e) {
-      vscode.window.showErrorMessage(`Failed to install: ${e.message}`);
-      return;
-    }
-  }
+        if (!versions.length) {
+          vscode.window.showErrorMessage(
+            "No FVM versions found. Install Flutter versions first."
+          );
+          return;
+        }
 
-  // ---------- Step 3: Create project and use the version (Goals 3) ----------
-  const selectedVersion = pick.version;
-  try {
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Creating ${name} with Flutter ${selectedVersion}…`,
-      },
-      () =>
-        new Promise((resolve, reject) => {
-          // Use ASYNC exec for fvm flutter create
-          exec(`fvm flutter create "${projectPath}"`, { encoding: "utf8" }, (err, stdout, stderr) => {
-            if (err) reject(new Error(err.message + "\n" + stderr));
-            else resolve(stdout);
+        // Select version
+        const pick = await vscode.window.showQuickPick(versions, {
+          placeHolder: "Select Flutter version for this project",
+        });
+        if (!pick) return;
+
+        // Create project
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Creating ${name} with Flutter ${pick.version}…`,
+          },
+          () =>
+            new Promise((resolve, reject) => {
+              exec(
+                `fvm flutter create "${projectPath}"`,
+                { encoding: "utf8" },
+                (err, stdout, stderr) => {
+                  if (err) reject(new Error(err.message + "\n" + stderr));
+                  else resolve(stdout);
+                }
+              );
+            })
+        );
+
+        // Set FVM version
+        try {
+          await new Promise((resolve, reject) => {
+            exec(
+              `fvm use ${pick.version}`,
+              { cwd: projectPath, encoding: "utf8" },
+              (err, stdout, stderr) => {
+                if (err) reject(new Error(err.message + "\n" + stderr));
+                else resolve(stdout);
+              }
+            );
           });
-        })
-    );
+        } catch (e) {
+          console.error(e);
+          vscode.window.showErrorMessage(
+            `Failed to set FVM version: ${e.message}`
+          );
+          return;
+        }
+        // Ask to open project
+        const open = await vscode.window.showInformationMessage(
+          `Project "${name}" created with Flutter ${pick.version}! Open folder?`,
+          "Yes",
+          "No"
+        );
 
-    // Set FVM version in project (Goal 3 continued: fvm use)
-    await new Promise((resolve, reject) => {
-      // Use ASYNC exec for fvm use
-      exec(`fvm use ${selectedVersion}`, { cwd: projectPath, encoding: "utf8" }, (err, stdout, stderr) => {
-        if (err) reject(new Error(err.message + "\n" + stderr));
-        else resolve(stdout);
-      });
-    });
-
-    // ---------- Step 4: Offer to open ----------
-    const open = await vscode.window.showInformationMessage(
-      `Project "${name}" created with FVM ${selectedVersion}! Open folder?`,
-      "Yes",
-      "No"
-    );
-
-    if (open === "Yes") {
-      await vscode.commands.executeCommand(
-        "vscode.openFolder",
-        vscode.Uri.file(projectPath),
-        { forceNewWindow: true }
-      );
+        if (open === "Yes") {
+          await vscode.commands.executeCommand(
+            "vscode.openFolder",
+            vscode.Uri.file(projectPath),
+            { forceNewWindow: true }
+          );
+        }
+      } catch (e) {
+        console.error(e + "checking...");
+        vscode.window.showErrorMessage(`Failed: ${e.message}`);
+      }
     }
-  } catch (e) {
-    vscode.window.showErrorMessage(`Failed to create project: ${e.message}`);
-  }
-});
-
+  );
 
   // ---------- Use Version ----------
   const cmdUseVersion = vscode.commands.registerCommand(
@@ -250,11 +266,16 @@ const cmdNewProject = vscode.commands.registerCommand("fvm.newProject", async ()
             title: `Installing ${ver}…`,
           },
           // For installation, use ASYNC exec wrapped in a Promise to prevent UI freezing
-          () => new Promise((resolve, reject) => {
-                exec(`fvm install ${ver}`, { encoding: "utf8" }, (err, stdout, stderr) => {
-                    if (err) reject(new Error(err.message + "\n" + stderr));
-                    else resolve(stdout);
-                });
+          () =>
+            new Promise((resolve, reject) => {
+              exec(
+                `fvm install ${ver}`,
+                { encoding: "utf8" },
+                (err, stdout, stderr) => {
+                  if (err) reject(new Error(err.message + "\n" + stderr));
+                  else resolve(stdout);
+                }
+              );
             })
         );
         vscode.window.showInformationMessage(`${ver} installed`);
