@@ -1,0 +1,95 @@
+{
+  "name": "fvm-pro",
+  "displayName": "FVM Pro",
+  "description": "Full FVM integration for Flutter",
+  "version": "0.0.1",
+  "publisher": "LightEmmanuel",
+  "engines": {
+    "vscode": "^1.101.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "views": {
+  "fvm-explorer": [
+    {
+      "id": "fvm.commands", 
+      "name": "FVM Commands"
+    }
+  ]
+},
+  "activationEvents": [
+    "onView:fvm.commands",
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "fvm-explorer",
+          "title": "FVM Manager",
+          "icon": "resources/flutter.png"
+        }
+      ]
+    },
+    "views": {
+      "fvm-explorer": [
+        {
+          "id": "fvm.commands",
+          "name": "FVM Commands"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "fvm.newProject",
+        "title": "FVM: New Project"
+      },
+      {
+        "command": "fvm.useVersion",
+        "title": "FVM: Use Version"
+      },
+      {
+        "command": "fvm.installVersion",
+        "title": "FVM: Install Version"
+      },
+      {
+        "command": "fvm.removeVersion",
+        "title": "FVM: Remove Version"
+      },
+      {
+        "command": "fvm.list",
+        "title": "FVM: List Versions"
+      },
+      {
+        "command": "fvm.global",
+        "title": "FVM: Set Global"
+      },
+      {
+        "command": "fvm.renamePackage",
+        "title": "FVM: Rename Package ID"
+      },
+      {
+        "command": "fvm.buildApk",
+        "title": "FVM: Build APK Release"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "mkdir -p out && cp extension.js out/extension.js",
+    "watch": "cp extension.js out/extension.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.105.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.36.0"
+  },
+  "dependencies": {
+    "child_process": "^1.0.2",
+    "path": "^0.12.7"
+  }
+}
